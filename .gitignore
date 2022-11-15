@@ -130,4 +130,5 @@ dmypy.json
 
 # logs
 /sandbox/lightning_logs
+/lightning_logs
 /.idea
