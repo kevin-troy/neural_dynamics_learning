@@ -8,3 +8,7 @@ Status:
 - [x] Extraction of trajectories and animation of single-DOF pendulum
 - [x] Cuda compatibility
 - [ ] Extension to multi-DOF system(s)
+
+<p align="center">
+  <img src="https://github.com/kevin-troy/neural_optimal_control/blob/main/sandbox/swingup.gif" width="400" height="300" />
+</p>
