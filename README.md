@@ -5,6 +5,8 @@ A project to implement data-driven control methods. An extension of the work per
 
 The focus of this work is to extend the results of the paper from a single DOF pendulum to a multi-DOF system, namely a double pendulum.
 
+- The baseline representation recreating the work of Massaroli et. al. can be found in the file "test_energy_shaping_pendulum.ipynb".
+
 Status:
 - [x] Baseline implementation with the help of [Torchdyn](https://github.com/DiffEqML/torchdyn) + tutorials recreating results of the paper.
 - [x] Extraction of trajectories and animation of single-DOF pendulum
