@@ -13,6 +13,7 @@ Status:
 - [x] Cuda compatibility
 - [ ] Extension to multi-DOF system(s)
 - [ ] Error analysis and network structure refinement
+- [X] Implementation of baseline linear Model-Predictive Control
 - [ ] Comparison to vanilla linear Model-Predictive Control
 
 <p align="center">
