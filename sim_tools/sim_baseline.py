@@ -1,10 +1,12 @@
 import numpy as np
-import dynamics_tools.dynamics as dynamics
+import sim_tools.dynamics as dynamics
+import time
 
 def sim_mpc(t, state_initial, state_desired, Q, R, P, N):
     """
     Simulates the baseline MPC with linearized newtonian dynamics
     """
+    timer_st = time.time()
     dt = t[1]-t[0]
     A, B = dynamics.linear_dynamics(dt)
 
@@ -25,4 +27,7 @@ def sim_mpc(t, state_initial, state_desired, Q, R, P, N):
         control_history[tstep,:],_,_ = dynamics.mpc_step(state_history[tstep,:], state_desired, A, B, P, Q, R, N)
         state_history[tstep+1,:] = f(state_history[tstep,:], control_history[tstep,:], dt)
 
-    return state_history, control_history
+    timer_end = time.time()
+    t_elapsed_seconds = timer_end-timer_st
+
+    return state_history, control_history, t_elapsed_seconds

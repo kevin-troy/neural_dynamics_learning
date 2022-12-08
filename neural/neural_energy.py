@@ -7,7 +7,9 @@ from torch.distributions import Uniform, Normal
 from torchdyn.models import ODEProblem
 
 """
-[1] Massaroli et. al., Optimal Energy Shaping via Neural Approximators https://arxiv.org/pdf/2101.05537.pdf
+[1] Massaroli et. al., Optimal Energy Shaping via Neural Approximators, https://arxiv.org/pdf/2101.05537.pdf
+[2] TorchDyn tutorials, https://github.com/DiffEqML/torchdyn/tree/master/tutorials
+
 """
 
 # System physical parameters
@@ -25,9 +27,6 @@ class MirrorSystem(nn.Module):
         with torch.set_grad_enabled(True):
             q = x[:,0:2]
             p = x[:,2:4]
-            #print("X=",x.shape)
-            #print("Q=",q.shape)
-            #print("P=",p.shape)
             q.requires_grad_(True)
 
             u = self._energy_shaping(q) + self._damping_injection(x)
@@ -41,9 +40,7 @@ class MirrorSystem(nn.Module):
         dq2 = p[:,1]/Ix
         dp1 = u[:,0]
         dp2 = u[:,1]
-        #print("dShape",dp2.shape)
-        output = torch.stack([dq1,dq2,dp1,dq2], 1)
-        #print("outshape=", output.shape)
+        output = torch.stack([dq1,dq2,dp1,dp2], 1)
         assert(output.shape[0] == p.shape[0])
         assert(output.shape[1] == 4)
 
@@ -64,14 +61,8 @@ class MirrorSystem(nn.Module):
         # Damping injection portion of control output
         # [1], eq. 16, second term
         # Returns [N_train x 2] tensor
-        assert(x.shape[1] == 4)
-        
-        #K_term = self.K(x)
-        #X_term = x[:, 2:]
-        #I_term = torch.Tensor([self.Ix, self.Iy]).to(device)
-        
-        
-        output = self.K(x)*x[:, 2:]/torch.Tensor([self.Ix, self.Iy]).to(device)
+        assert(x.shape[1] == 4)        
+        output = self.K(x)*x[:, 2:]/torch.Tensor([self.Ix, self.Iy]).to(x)
         assert(output.shape[0] == x.shape[0])
         assert(output.shape[1] == 2)
 
@@ -181,10 +172,10 @@ def posterior_distribution(mu, sigma, device='cuda'):
 
 def weighted_log_likelihood_loss(x, target, weight):
     # weighted negative log likelihood loss
-    #print("wLLL:target", target)
     log_prob = target.log_prob(x)
     weighted_log_p = weight * log_prob
     return -torch.mean(weighted_log_p.sum(1))
+
 
 class ControlEffort(nn.Module):
     def __init__(self,f):
@@ -195,7 +186,6 @@ class ControlEffort(nn.Module):
             q = x[:,:2].requires_grad_(True)
             u = self.f._energy_shaping(q) + self.f._damping_injection(x)
         output = torch.sum(torch.abs(u),1, keepdim=True)
-        #print("ControlEffort:",output.shape)
         return output
 
 
@@ -250,117 +240,3 @@ def rollout_plots(model, t_end, N_timesteps, prior, desired):
             ax[state_id].set_ylabel(labels[state_id])
 
     plt.show()
-
-
-if __name__ == "__main__":
-    from numpy import pi as pi
-
-    raise RuntimeError("Depreciated!")
-
-    prior = prior_distribution(-pi/2, pi/2, -pi/2, pi/2, -pi/8, pi/8, -pi/8, pi/8)
-    target = posterior_distribution([0,0,0,0], [0.001, 0.001, 0.001, 0.001])
-
-    
-
-    """
-    # v0 NN arch
-
-    hdim = 64
-    V = nn.Sequential(
-        nn.Linear(2, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim, hdim),
-        nn.ReLU(),
-        nn.Linear(hdim,2)
-    )
-    # K takes in [q1, q2, p1, p2] -> 4
-    K = nn.Sequential(
-        nn.Linear(4, hdim),
-        nn.ReLU(),
-        nn.Linear(hdim,2),
-        nn.ReLU()
-    )
-    # K and V output part of the optimal control, thus -> 2
-    # Final loss = 6.27e+07, 500ep
-    """
-
-    """
-    hdim = 128
-    V = nn.Sequential(
-        nn.Linear(2, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim, hdim),
-        nn.ReLU(),
-        nn.Linear(hdim,2)
-    )
-    K = nn.Sequential(
-        nn.Linear(4, hdim),
-        nn.ReLU(),
-        nn.Linear(hdim,2),
-        nn.ReLU()
-    )
-    final loss = 6.2e+7, 500ep
-    """
-
-    hdim = 128
-    V = nn.Sequential(
-        nn.Linear(2, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim, hdim),
-        nn.Tanh(),
-        nn.Linear(hdim,2)
-    )
-    K = nn.Sequential(
-        nn.Linear(4, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim, hdim),
-        nn.Softplus(),
-        nn.Linear(hdim,2),
-        nn.Softplus()
-    )
-
-
-
-    # Initialize final linear layers as zeros
-    for p in V[-1].parameters(): torch.nn.init.zeros_(p)
-    for p in K[-2].parameters(): torch.nn.init.zeros_(p)
-
-    # Define dynamics
-    f = MirrorSystem(V,K)
-    aug_f = AugmentedMirror(f, ControlEffort(f))
-
-    # Define time horizon
-    t_span = torch.linspace(0,10,100)
-
-    problem = ODEProblem(aug_f, sensitivity='autograd', solver='rk4')
-
-    learn = EnergyShapingLearner(problem, prior, target, t_span)
-
-    if True:
-        trainer = pl.Trainer(max_epochs=100, accelerator="gpu")
-
-    trainer.fit(learn)
-    print("Training Complete!")
-
-    # Plot trajectories
-    import matplotlib.pyplot as plt
-    from torchdiffeq import odeint
-
-    device = 'cpu'
-    n_ic = 100
-    x0 = prior.sample(torch.Size([n_ic])).cpu()
-    x0 = torch.cat([x0, torch.zeros(n_ic,1)], 1)
-    model = aug_f.cpu()
-
-    traj = odeint(model, x0, t_span, method='midpoint').detach()
-    traj = traj[..., :-1]
-
-    fig, ax = plt.subplots(4,1)
-    for i in range(n_ic):
-        for state_id in range(4):
-            ax[state_id].plot(t_span, traj[:,i,0], 'k', alpha=.1)
-
-    plt.show()
-
