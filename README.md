@@ -11,8 +11,8 @@ Status:
 - [x] Baseline implementation with the help of [Torchdyn](https://github.com/DiffEqML/torchdyn) + tutorials recreating results of the paper.
 - [x] Extraction of trajectories and animation of single-DOF pendulum
 - [x] Cuda compatibility
-- [ ] Extension to multi-DOF system(s)
-- [ ] Error analysis and network structure refinement
+- [X] Extension to multi-DOF system(s)
+- [X] Error analysis and network structure refinement
 - [X] Implementation of baseline linear Model-Predictive Control
 - [ ] Comparison to vanilla linear Model-Predictive Control
 
