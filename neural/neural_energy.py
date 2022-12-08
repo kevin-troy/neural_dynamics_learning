@@ -66,7 +66,7 @@ class MirrorSystem(nn.Module):
         assert(output.shape[0] == x.shape[0])
         assert(output.shape[1] == 2)
 
-        return output
+        return -output
 
     def _autonomous_energy(self, x):
         """
@@ -85,6 +85,8 @@ class MirrorSystem(nn.Module):
         Hamiltonian of controlled system
         Returns [N_train x 1] tensor
         """
+
+        # V*(q), [1] near eqn (14)
         control_energy = self.V(x[:,:2])
 
         assert(control_energy.shape[0] == x.shape[0])
