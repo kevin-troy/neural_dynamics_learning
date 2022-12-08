@@ -4,6 +4,7 @@ from torch.autograd import grad as grad
 import pytorch_lightning as pl
 import torch.utils.data as data
 from torch.distributions import Uniform, Normal
+from torchdyn.models import ODEProblem
 
 """
 [1] Massaroli et. al., Optimal Energy Shaping via Neural Approximators https://arxiv.org/pdf/2101.05537.pdf
@@ -12,7 +13,7 @@ from torch.distributions import Uniform, Normal
 # System physical parameters
 Ix = 2.0
 Iy = 2.0
-device = 'cpu'
+device = 'cuda'
 
 class MirrorSystem(nn.Module):
     def __init__(self, V, K):
@@ -63,23 +64,14 @@ class MirrorSystem(nn.Module):
         # Damping injection portion of control output
         # [1], eq. 16, second term
         # Returns [N_train x 2] tensor
-
-        assert(x.shape[0] == 2048)
         assert(x.shape[1] == 4)
-        #print("Xshape=",x.shape)
-        #print("Xdevice=",x.get_device())
-
         
-        K_term = self.K(x)
-        X_term = x[:, 2:]
-        I_term = torch.Tensor([self.Ix, self.Iy]).to(device)
-        #print("XfullDevice=", x.get_device())
-        #print("KtermDevice", K_term.get_device())
-        #print("XtermDevice", X_term.get_device())
-        #print("ItermDevice=", I_term.get_device())
+        #K_term = self.K(x)
+        #X_term = x[:, 2:]
+        #I_term = torch.Tensor([self.Ix, self.Iy]).to(device)
         
         
-        output = self.K(x)*x[:, 2:]/torch.Tensor([self.Ix, self.Iy])
+        output = self.K(x)*x[:, 2:]/torch.Tensor([self.Ix, self.Iy]).to(device)
         assert(output.shape[0] == x.shape[0])
         assert(output.shape[1] == 2)
 
@@ -122,28 +114,24 @@ class AugmentedMirror(nn.Module):
         x = x[:,:4]
         
         dxdt = self.f(t,x)   
-        #print("dxdt=",dxdt)
         dLdt = self.integral_loss(t,x)
         output = torch.cat([dxdt, dLdt], 1)
-
-        #print("dxDtShape=",dxdt.shape)
-        #print("dLshape=", dLdt.shape)
-        #print("Forward:Outshape=", output.shape)
         assert(output.shape[1] == 5)
 
         return output
 
 
 class EnergyShapingLearner(pl.LightningModule):
-    def __init__(self, model: nn.Module, prior_dist, target_dist, t_span, sensitivity='autograd'):
+    def __init__(self, model: nn.Module, prior_dist, target_dist, t_span, lr=5e-3, batch_size=2048, gamma=0.999, sensitivity='autograd'):
         super().__init__()
         self.model = model
         self.prior = prior_dist
         self.target = target_dist
         self.t_span = t_span
-        self.batch_size = 2048
-        self.lr = 5e-3
+        self.batch_size = batch_size
+        self.lr = lr
         self.weight = torch.tensor([1., 1., 1., 1.]).reshape(1,4)
+        self.gamma = gamma
 
     def forward(self, x):
         #print("odeIntXShape=", x.shape)
@@ -157,7 +145,6 @@ class EnergyShapingLearner(pl.LightningModule):
         # Integrate
         x0 = torch.cat([x0, torch.zeros(self.batch_size,1).to(x0)], 1)
         # x0.shape -> [Batch_size x N_states + 1 = 5]
-        #print("training_step:x0Shape", x0.shape)
         _,xTl = self(x0)
         xT, L = xTl[-1:, :, :4], xTl[-1,:,-1:]
 
@@ -165,15 +152,13 @@ class EnergyShapingLearner(pl.LightningModule):
         terminal_loss = weighted_log_likelihood_loss(xT, self.target, self.weight.to(xT))
         integral_loss = torch.mean(L)
 
-        #print("TerminalLossShape=",terminal_loss.shape)
-        #print("IntegralLossShape=",integral_loss.shape)
-
-        loss = terminal_loss + 0.01*integral_loss
+        loss = terminal_loss + 0.0001*integral_loss
+        self.log("val_loss", loss)
         return {'loss':loss}
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr = self.lr)
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.gamma)
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
@@ -183,20 +168,20 @@ class EnergyShapingLearner(pl.LightningModule):
         return temp
 
 
-def prior_distribution(q1_min, q1_max, q2_min, q2_max, p1_min, p1_max, p2_min, p2_max, device='cpu'):
+def prior_distribution(q1_min, q1_max, q2_min, q2_max, p1_min, p1_max, p2_min, p2_max, device='cuda'):
     lower = torch.Tensor([q1_min, q2_min, p1_min, p2_min]).to(device)
     upper = torch.Tensor([q1_max, q2_max, p1_max, p2_max]).to(device)
     return Uniform(lower, upper)
 
 
-def posterior_distribution(mu, sigma, device='cpu'):
+def posterior_distribution(mu, sigma, device='cuda'):
     mu, sigma = torch.Tensor(mu).reshape(1,4).to(device), torch.Tensor(sigma).reshape(1,4).to(device)
     return Normal(mu, torch.sqrt(sigma))
 
 
 def weighted_log_likelihood_loss(x, target, weight):
     # weighted negative log likelihood loss
-    print("wLLL:target", target)
+    #print("wLLL:target", target)
     log_prob = target.log_prob(x)
     weighted_log_p = weight * log_prob
     return -torch.mean(weighted_log_p.sum(1))
@@ -214,12 +199,71 @@ class ControlEffort(nn.Module):
         return output
 
 
+def train_energy_model(V, K, t_end, N_timesteps, prior, target, batch_size=2048, lr=5e-3, gamma=0.999, epochs=100, use_early_stopping=False):
+    # Initialize final linear layers as zeros
+    from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+
+    for p in V[-1].parameters(): torch.nn.init.zeros_(p)
+    for p in K[-2].parameters(): torch.nn.init.zeros_(p)
+
+    # Define dynamics
+    f = MirrorSystem(V,K)
+    aug_f = AugmentedMirror(f, ControlEffort(f))
+
+    # Define time horizon
+    t_span = torch.linspace(0,t_end,N_timesteps)
+    problem = ODEProblem(aug_f, sensitivity='autograd', solver='rk4')
+    learn = EnergyShapingLearner(problem, prior, target, t_span, lr=lr, batch_size=batch_size, gamma=gamma)
+    
+    if use_early_stopping:
+        trainer = pl.Trainer(max_epochs=epochs, accelerator="gpu", callbacks=[EarlyStopping(monitor="val_loss", mode="min")])
+    else:   
+        trainer = pl.Trainer(max_epochs=epochs, accelerator="gpu")
+
+    trainer.fit(learn)
+    model = aug_f.cpu()
+    return model
+
+
+def rollout_plots(model, t_end, N_timesteps, prior, desired):
+    import matplotlib.pyplot as plt
+    from torchdiffeq import odeint
+    import numpy as np
+
+    t_span = torch.linspace(0, t_end, N_timesteps)
+    global device
+    device = 'cpu'
+    n_ic = 100
+    x0 = prior.sample(torch.Size([n_ic])).cpu()
+    x0 = torch.cat([x0, torch.zeros(n_ic,1)], 1)
+
+    traj = odeint(model, x0, t_span, method='midpoint').detach()
+    traj = traj[..., :-1]
+
+    fig, ax = plt.subplots(4,1)
+    labels = ["q_1", "q_2", "p_1", "p_2"]
+    for i in range(n_ic):
+        for state_id in range(4):
+            ax[state_id].plot(t_span, traj[:,i,0], 'k', alpha=.1)
+            ax[state_id].plot(t_span, torch.ones_like(traj[:,i,0])*desired[state_id], 'k', alpha=.1)
+            ax[state_id].set_xlabel("Time (s)")
+            ax[state_id].set_ylabel(labels[state_id])
+
+    plt.show()
+
+
 if __name__ == "__main__":
     from numpy import pi as pi
-    from torchdyn.models import ODEProblem
 
-    prior = prior_distribution(-2*pi, 2*pi, -2*pi, 2*pi, -pi/2, pi/2, -pi/2, pi/2)
+    raise RuntimeError("Depreciated!")
+
+    prior = prior_distribution(-pi/2, pi/2, -pi/2, pi/2, -pi/8, pi/8, -pi/8, pi/8)
     target = posterior_distribution([0,0,0,0], [0.001, 0.001, 0.001, 0.001])
+
+    
+
+    """
+    # v0 NN arch
 
     hdim = 64
     V = nn.Sequential(
@@ -237,6 +281,47 @@ if __name__ == "__main__":
         nn.ReLU()
     )
     # K and V output part of the optimal control, thus -> 2
+    # Final loss = 6.27e+07, 500ep
+    """
+
+    """
+    hdim = 128
+    V = nn.Sequential(
+        nn.Linear(2, hdim),
+        nn.Softplus(),
+        nn.Linear(hdim, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim,2)
+    )
+    K = nn.Sequential(
+        nn.Linear(4, hdim),
+        nn.ReLU(),
+        nn.Linear(hdim,2),
+        nn.ReLU()
+    )
+    final loss = 6.2e+7, 500ep
+    """
+
+    hdim = 128
+    V = nn.Sequential(
+        nn.Linear(2, hdim),
+        nn.Softplus(),
+        nn.Linear(hdim, hdim),
+        nn.Softplus(),
+        nn.Linear(hdim, hdim),
+        nn.Tanh(),
+        nn.Linear(hdim,2)
+    )
+    K = nn.Sequential(
+        nn.Linear(4, hdim),
+        nn.Softplus(),
+        nn.Linear(hdim, hdim),
+        nn.Softplus(),
+        nn.Linear(hdim,2),
+        nn.Softplus()
+    )
+
+
 
     # Initialize final linear layers as zeros
     for p in V[-1].parameters(): torch.nn.init.zeros_(p)
@@ -247,14 +332,35 @@ if __name__ == "__main__":
     aug_f = AugmentedMirror(f, ControlEffort(f))
 
     # Define time horizon
-    t_span = torch.linspace(0,5,50)
+    t_span = torch.linspace(0,10,100)
 
     problem = ODEProblem(aug_f, sensitivity='autograd', solver='rk4')
 
     learn = EnergyShapingLearner(problem, prior, target, t_span)
 
     if True:
-        trainer = pl.Trainer(max_epochs=10)
+        trainer = pl.Trainer(max_epochs=100, accelerator="gpu")
 
     trainer.fit(learn)
-    print("Complete!")
+    print("Training Complete!")
+
+    # Plot trajectories
+    import matplotlib.pyplot as plt
+    from torchdiffeq import odeint
+
+    device = 'cpu'
+    n_ic = 100
+    x0 = prior.sample(torch.Size([n_ic])).cpu()
+    x0 = torch.cat([x0, torch.zeros(n_ic,1)], 1)
+    model = aug_f.cpu()
+
+    traj = odeint(model, x0, t_span, method='midpoint').detach()
+    traj = traj[..., :-1]
+
+    fig, ax = plt.subplots(4,1)
+    for i in range(n_ic):
+        for state_id in range(4):
+            ax[state_id].plot(t_span, traj[:,i,0], 'k', alpha=.1)
+
+    plt.show()
+
