@@ -37,7 +37,7 @@ class MirrorSystem(nn.Module):
         # Continuous time Hamiltonian dynamics
         # Returns shape [N_train x 4]
         dq1 = p[:,0]/Ix
-        dq2 = p[:,1]/Ix
+        dq2 = p[:,1]/Iy
         dp1 = u[:,0]
         dp2 = u[:,1]
         output = torch.stack([dq1,dq2,dp1,dp2], 1)
@@ -73,7 +73,7 @@ class MirrorSystem(nn.Module):
         Hamiltonian of uncontrolled system
         Returns [N_train x 1] tensor
         """
-        energy = 1/2*Ix*x[:,0]**2 + 1/2*Iy*x[:,1]**2
+        energy = (Ix*x[:,0]**2)/2. + (Iy*x[:,1]**2)/2.
         
         assert(energy.shape[0] == x.shape[0])
         assert(energy.shape[1] == 1)
@@ -187,7 +187,7 @@ class ControlEffort(nn.Module):
         with torch.set_grad_enabled(True):
             q = x[:,:2].requires_grad_(True)
             u = self.f._energy_shaping(q) + self.f._damping_injection(x)
-        output = torch.sum(torch.abs(u),1, keepdim=True)
+        output = torch.sum(torch.abs(u), 1, keepdim=True)
         return output
 
 
