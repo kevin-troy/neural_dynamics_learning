@@ -14,7 +14,7 @@ Status:
 - [X] Extension to multi-DOF system(s)
 - [X] Error analysis and network structure refinement
 - [X] Implementation of baseline linear Model-Predictive Control
-- [ ] Comparison to vanilla linear Model-Predictive Control
+- [X] Comparison to vanilla linear Model-Predictive Control
 
 <p align="center">
   <img src="https://github.com/kevin-troy/neural_optimal_control/blob/main/sandbox/swingup.gif" width="400" height="300" />
